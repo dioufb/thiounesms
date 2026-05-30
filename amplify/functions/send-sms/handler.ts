@@ -52,43 +52,32 @@ export const handler: AppSyncResolverHandler<SendSMSArgs, unknown> = async (even
   // Atomic quota check + increment using conditional expression
   const quotaKey = `${userId}#${today}`;
   try {
-    // Try to increment existing counter with condition
-    await ddbDoc.send(new UpdateCommand({
+    // Try to create new quota record (first send of the day)
+    await ddbDoc.send(new PutCommand({
       TableName: process.env.DAILY_QUOTA_TABLE_NAME,
-      Key: { id: quotaKey },
-      UpdateExpression: "SET sendCount = sendCount + :inc",
-      ConditionExpression: "sendCount < :limit",
-      ExpressionAttributeValues: { ":inc": 1, ":limit": maxDailySends },
+      Item: { id: quotaKey, userId, date: today, sendCount: 1 },
+      ConditionExpression: "attribute_not_exists(id)",
     }));
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "name" in err) {
-      if ((err as { name: string }).name === "ConditionalCheckFailedException") {
-        return JSON.stringify({
-          success: false,
-          error: "QUOTA_EXCEEDED",
-          message: `Daily limit of ${maxDailySends} bulk sends reached. Try again tomorrow.`,
-        });
-      }
-      // Item doesn't exist yet — create with count 1 (conditional on not existing)
+    if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "ConditionalCheckFailedException") {
+      // Item exists — try to increment with limit check
       try {
-        await ddbDoc.send(new PutCommand({
+        await ddbDoc.send(new UpdateCommand({
           TableName: process.env.DAILY_QUOTA_TABLE_NAME,
-          Item: { id: quotaKey, userId, date: today, sendCount: 1 },
-          ConditionExpression: "attribute_not_exists(id)",
+          Key: { id: quotaKey },
+          UpdateExpression: "SET sendCount = sendCount + :inc",
+          ConditionExpression: "sendCount < :limit",
+          ExpressionAttributeValues: { ":inc": 1, ":limit": maxDailySends },
         }));
-      } catch (putErr: unknown) {
-        if (putErr && typeof putErr === "object" && "name" in putErr && (putErr as { name: string }).name === "ConditionalCheckFailedException") {
-          // Race: another request created it, retry the update
-          await ddbDoc.send(new UpdateCommand({
-            TableName: process.env.DAILY_QUOTA_TABLE_NAME,
-            Key: { id: quotaKey },
-            UpdateExpression: "SET sendCount = sendCount + :inc",
-            ConditionExpression: "sendCount < :limit",
-            ExpressionAttributeValues: { ":inc": 1, ":limit": maxDailySends },
-          }));
-        } else {
-          throw putErr;
+      } catch (updateErr: unknown) {
+        if (updateErr && typeof updateErr === "object" && "name" in updateErr && (updateErr as { name: string }).name === "ConditionalCheckFailedException") {
+          return JSON.stringify({
+            success: false,
+            error: "QUOTA_EXCEEDED",
+            message: `Daily limit of ${maxDailySends} bulk sends reached. Try again tomorrow.`,
+          });
         }
+        throw updateErr;
       }
     } else {
       throw err;
