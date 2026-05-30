@@ -21,7 +21,7 @@ export default function SendPage() {
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [sending, setSending] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [result, setResult] = useState<{ sent: number; failed: number } | null>(null);
+  const [result, setResult] = useState<{ sent: number; failed: number; message?: string } | null>(null);
 
   useEffect(() => {
     Promise.all([client.models.Group.list(), client.models.Template.list()]).then(([g, t]) => {
